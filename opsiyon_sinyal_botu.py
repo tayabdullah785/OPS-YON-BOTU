@@ -1,4 +1,5 @@
 import collections
+import datetime
 import json
 import logging
 import os
@@ -18,7 +19,7 @@ from telegram.ext import (
 )
 
 # -------------------------------------------------------------
-# KONFİGÜRASYON VE APİ ANAHTARLARI
+# KONFİGÜRASYON VE API ANAHTARLARI
 # -------------------------------------------------------------
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "davai2hr01qp1e4mdhigdavai2hr01qp1e4mdhj0")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8964838160:AAHIGLdgUEpaghwbPJWrKOC0KkGltxw-4lQ")
@@ -179,11 +180,14 @@ def teknik_analiz_yap(finnhub_kodu, vade_dakika=2):
         elif son_fiyat >= bb_high:
             asagi_puan += 2
 
+        alligator_durum = "⚪ Nötr / Karışık"
         if not (pd.isna(lips) or pd.isna(teeth) or pd.isna(jaw)):
             if lips > teeth > jaw:
                 yukari_puan += 2
+                alligator_durum = "🟢 YUKARI Trend"
             elif lips < teeth < jaw:
                 asagi_puan += 2
+                alligator_durum = "🔴 AŞAĞI Trend"
 
         if yukari_puan >= 4 and yukari_puan > asagi_puan:
             karar = "🟢 YUKARI (AL)"
@@ -192,11 +196,16 @@ def teknik_analiz_yap(finnhub_kodu, vade_dakika=2):
         else:
             karar = "⚪ NÖTR (BEKLE)"
 
+        # Türkiye Saati ile Anlık Giriş/Analiz Saati
+        su_an = datetime.datetime.now().strftime("%H:%M:%S")
+
         detay = (
+            f"⏰ Analiz/Giriş Saati: {su_an}\n"
             f"💵 Canlı Fiyat: {son_fiyat:.5f}\n"
             f"🔹 RSI (14): {rsi:.2f}\n"
             f"🔹 SMA (20): {sma_20:.5f}\n"
-            f"🔹 Bollinger Alt/Üst: {bb_low:.5f} / {bb_high:.5f}\n\n"
+            f"🔹 Bollinger Alt/Üst: {bb_low:.5f} / {bb_high:.5f}\n"
+            f"🔹 Alligator Durumu: {alligator_durum}\n\n"
             f"🎯 SİNYAL KARARI: {karar}"
         )
 
