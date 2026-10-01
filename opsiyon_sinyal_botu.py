@@ -1,11 +1,12 @@
 import collections
-import datetime
+from datetime import datetime
 import json
 import logging
 import os
 import sys
 import threading
 import time
+from zoneinfo import ZoneInfo
 import pandas as pd
 import ta
 import websocket
@@ -196,8 +197,9 @@ def teknik_analiz_yap(finnhub_kodu, vade_dakika=2):
         else:
             karar = "⚪ NÖTR (BEKLE)"
 
-        # Türkiye Saati ile Anlık Giriş/Analiz Saati
-        su_an = datetime.datetime.now().strftime("%H:%M:%S")
+        # Türkiye Saati (Europe/Istanbul) Sabitlenmiş Anlık Saat
+        turkiye_zaman = datetime.now(ZoneInfo("Europe/Istanbul"))
+        su_an = turkiye_zaman.strftime("%H:%M:%S")
 
         detay = (
             f"⏰ Analiz/Giriş Saati: {su_an}\n"
