@@ -1,4 +1,3 @@
-import collections
 from datetime import datetime
 import json
 import logging
@@ -8,6 +7,7 @@ import threading
 import time
 from zoneinfo import ZoneInfo
 import pandas as pd
+import requests
 import ta
 import websocket
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -29,7 +29,6 @@ if not FINNHUB_API_KEY or not TELEGRAM_BOT_TOKEN:
     logging.critical("❌ HATA: FINNHUB_API_KEY veya TELEGRAM_BOT_TOKEN bulunamadı!")
     sys.exit(1)
 
-# Finnhub Free tier sınırı nedeniyle 30 parite ile sınırlandırılmıştır
 PARITE_HARITASI = {
     "USD/MXN": "OANDA:USD_MXN",
     "USD/NOK": "OANDA:USD_NOK",
@@ -66,8 +65,6 @@ PARITE_HARITASI = {
 INDEX_TO_NAME = list(PARITE_HARITASI.keys())
 NAME_TO_INDEX = {name: i for i, name in enumerate(INDEX_TO_NAME)}
 
-fiyat_hafizasi = {kod: collections.deque(maxlen=500) for kod in PARITE_HARITASI.values()}
-
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -75,70 +72,40 @@ logging.basicConfig(
 
 
 # -------------------------------------------------------------
-# WEBSOCKET CANLI VERİ AKIŞI
-# -------------------------------------------------------------
-def on_message(ws, message):
-    try:
-        data = json.loads(message)
-        if data.get("type") == "trade":
-            for trade in data.get("data", []):
-                symbol = trade.get("s")
-                fiyat = trade.get("p")
-                if symbol in fiyat_hafizasi and fiyat is not None:
-                    fiyat_hafizasi[symbol].append(float(fiyat))
-    except Exception as e:
-        logging.error(f"WebSocket mesaj işleme hatası: {e}")
-
-
-def on_open(ws):
-    logging.info("🚀 Finnhub Canlı Veri Akışı Bağlandı!")
-    for finnhub_kodu in PARITE_HARITASI.values():
-        ws.send(json.dumps({"type": "subscribe", "symbol": finnhub_kodu}))
-        time.sleep(0.05)
-
-
-def finnhub_websocket_run():
-    socket_url = f"wss://ws.finnhub.io?token={FINNHUB_API_KEY}"
-    while True:
-        try:
-            ws = websocket.WebSocketApp(
-                socket_url,
-                on_open=on_open,
-                on_message=on_message,
-            )
-            ws.run_forever(ping_interval=30, ping_timeout=10)
-        except Exception as e:
-            logging.error(f"❌ Kopma oluştu: {e}. 3 saniye içinde yeniden bağlanılıyor...")
-            time.sleep(3)
-
-
-# -------------------------------------------------------------
-# TEKNİK ANALİZ MOTORU
+# TEKNİK ANALİZ MOTORU (Vadeye Göre Çözünürlük Ayarlı)
 # -------------------------------------------------------------
 def teknik_analiz_yap(finnhub_kodu, vade_dakika=2):
-    fiyatlar = list(fiyat_hafizasi[finnhub_kodu])
-
-    if len(fiyatlar) < 30:
-        return "YETERSİZ_VERİ", len(fiyatlar)
-
     try:
-        step = max(1, vade_dakika // 2)
-        secilen_fiyatlar = fiyatlar[::step]
+        # Kullanıcının seçtiği vadeye göre Finnhub mum periyodunu belirliyoruz
+        if vade_dakika >= 5:
+            resolution = "5"
+        else:
+            resolution = "1"
+        
+        # Geçmiş veriyi hesaplamak için yeterli zaman aralığı (Son 4 saat)
+        bitis_zamani = int(time.time())
+        baslangic_zamani = bitis_zamani - (4 * 3600) 
 
-        if len(secilen_fiyatlar) < 20:
-            secilen_fiyatlar = fiyatlar
+        url = f"https://finnhub.io/api/v1/forex/candle?symbol={finnhub_kodu}&resolution={resolution}&from={baslangic_zamani}&to={bitis_zamani}&token={FINNHUB_API_KEY}"
+        
+        response = requests.get(url, timeout=10)
+        veri = response.json()
 
-        df = pd.DataFrame({"close": secilen_fiyatlar}, dtype=float)
+        if veri.get("s") != "ok" or not veri.get("c") or len(veri.get("c")) < 20:
+            return "YETERSİZ_VERİ", 0
+
+        kapanislar = veri["c"] 
+        df = pd.DataFrame({"close": kapanislar}, dtype=float)
         son_fiyat = float(df["close"].iloc[-1])
 
-        # 1. RSI
+        # 1. RSI (14)
         try:
             rsi_series = ta.momentum.rsi(df["close"], window=14)
             rsi = float(rsi_series.iloc[-1]) if not rsi_series.empty and not pd.isna(rsi_series.iloc[-1]) else 50.0
         except Exception:
             rsi = 50.0
 
-        # 2. SMA
+        # 2. SMA (20)
         try:
             sma_series = ta.trend.sma_indicator(df["close"], window=20)
             sma_20 = float(sma_series.iloc[-1]) if not sma_series.empty and not pd.isna(sma_series.iloc[-1]) else son_fiyat
@@ -197,7 +164,6 @@ def teknik_analiz_yap(finnhub_kodu, vade_dakika=2):
         else:
             karar = "⚪ NÖTR (BEKLE)"
 
-        # Türkiye Saati (Europe/Istanbul) Sabitlenmiş Anlık Saat
         turkiye_zaman = datetime.now(ZoneInfo("Europe/Istanbul"))
         su_an = turkiye_zaman.strftime("%H:%M:%S")
 
@@ -256,7 +222,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             keyboard = [
                 [
-                    InlineKeyboardButton("⏱️ 2 Dakika", callback_data="t_2"),
+                    InlineKeyboardButton("⏱ 2 Dakika", callback_data="t_2"),
                     InlineKeyboardButton("⏱️ 3 Dakika", callback_data="t_3"),
                     InlineKeyboardButton("⏱️ 5 Dakika", callback_data="t_5"),
                 ]
@@ -281,8 +247,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if karar == "YETERSİZ_VERİ":
                 await query.edit_message_text(
-                    f"⏳ {parite_adi} için canlı fiyat verisi toplanıyor...\n"
-                    f"Lütfen 5-10 saniye sonra tekrar deneyin.\n(Toplanan Veri: {detay}/30)"
+                    f"⏳ {parite_adi} için mum verisi alınamadı veya yetersiz.\n"
+                    f"Lütfen birkaç saniye sonra tekrar deneyin."
                 )
             else:
                 mesaj = (
@@ -293,20 +259,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(text=mesaj)
     except BadRequest as e:
         if "Message is not modified" in str(e):
-            pass  # Aynı mesaja tıklandığında oluşan zararsız hata bastırılır
+            pass
         else:
             logging.error(f"Telegram BadRequest hatası: {e}")
     except Exception as e:
         logging.warning(f"Buton işleme hatası: {e}")
 
 
-# -------------------------------------------------------------
-# UYGULAMAYI BAŞLAT
-# -------------------------------------------------------------
 if __name__ == "__main__":
-    ws_thread = threading.Thread(target=finnhub_websocket_run, daemon=True)
-    ws_thread.start()
-
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
