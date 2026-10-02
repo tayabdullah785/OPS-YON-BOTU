@@ -72,26 +72,27 @@ logging.basicConfig(
 
 
 # -------------------------------------------------------------
-# TEKNİK ANALİZ MOTORU (Vadeye Göre Çözünürlük Ayarlı)
+# TEKNİK ANALİZ MOTORU (Hata Korumalı)
 # -------------------------------------------------------------
 def teknik_analiz_yap(finnhub_kodu, vade_dakika=2):
     try:
-        # Kullanıcının seçtiği vadeye göre Finnhub mum periyodunu belirliyoruz
         if vade_dakika >= 5:
             resolution = "5"
         else:
             resolution = "1"
         
-        # Geçmiş veriyi hesaplamak için yeterli zaman aralığı (Son 4 saat)
         bitis_zamani = int(time.time())
-        baslangic_zamani = bitis_zamani - (4 * 3600) 
+        baslangic_zamani = bitis_zamani - (12 * 3600) 
 
         url = f"https://finnhub.io/api/v1/forex/candle?symbol={finnhub_kodu}&resolution={resolution}&from={baslangic_zamani}&to={bitis_zamani}&token={FINNHUB_API_KEY}"
         
         response = requests.get(url, timeout=10)
         veri = response.json()
 
-        if veri.get("s") != "ok" or not veri.get("c") or len(veri.get("c")) < 20:
+        logging.info(f"Finnhub Yanıtı ({finnhub_kodu}): {veri.get('s')}")
+
+        if veri.get("s") != "ok" or not veri.get("c") or len(veri.get("c")) < 10:
+            logging.warning(f"Veri yetersiz veya alınamadı. Gelen veri: {veri}")
             return "YETERSİZ_VERİ", 0
 
         kapanislar = veri["c"] 
